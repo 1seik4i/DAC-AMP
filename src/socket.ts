@@ -1,7 +1,8 @@
 import { io } from 'socket.io-client';
 
-// Connect to NestJS backend on port 3001
-export const socket = io('http://localhost:3001', {
+const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+
+export const socket = io(backendUrl, {
   autoConnect: true,
   reconnection: true,
 });

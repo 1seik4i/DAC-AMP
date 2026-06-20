@@ -1,0 +1,6 @@
+{
+  "name": "DAC Studio",
+  "description": "Interactive hi-fi Digital-to-Analog Converter (DAC) hardware controller. Attenuate decibel volume outputs, configure 10-band parametric audio equalizers, toggle OLED front screen animations, and download corrective headphone profiles.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

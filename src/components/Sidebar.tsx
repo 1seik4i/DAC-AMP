@@ -15,7 +15,8 @@ import {
   Unplug
 } from 'lucide-react';
 import { View } from '../types';
-import { useLocalStorageState } from '../hooks/useLocalStorageState';
+import { useDeviceStore } from '../store/deviceStore';
+import { socket } from '../socket';
 
 interface SidebarProps {
   currentView: View;
@@ -34,8 +35,16 @@ export default function Sidebar({
   onLogout,
   onOpenAuth
 }: SidebarProps) {
-  const [isDeviceConnected, setIsDeviceConnected] = useLocalStorageState('dac_device_connected', true);
+  const isDeviceConnected = useDeviceStore(state => state.connectionStatus === 'connected');
   
+  const toggleConnection = () => {
+    if (isDeviceConnected) {
+      socket.emit('cmd:disconnectDevice');
+    } else {
+      socket.emit('cmd:connectDevice');
+    }
+  };
+
   const handleNavClick = (view: View, eqMode?: 'simple' | 'advanced') => {
     setCurrentView(view);
     if (eqMode) {
@@ -182,7 +191,7 @@ export default function Sidebar({
           </div>
           
           <button 
-            onClick={() => setIsDeviceConnected(!isDeviceConnected)}
+            onClick={toggleConnection}
             className={`p-1.5 rounded-lg transition-colors ${isDeviceConnected ? 'bg-red-500/10 hover:bg-red-500/20 text-red-400' : 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400'}`}
             title={isDeviceConnected ? 'Disconnect Device' : 'Connect Device'}
           >

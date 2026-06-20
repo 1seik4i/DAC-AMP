@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User } from 'lucide-react';
+import { User, LayoutGrid, SlidersHorizontal, Users2, Settings } from 'lucide-react';
 import { View, UserState } from './types';
 import Sidebar from './components/Sidebar';
 import DashboardView from './components/DashboardView';
@@ -10,6 +10,7 @@ import SettingsView from './components/SettingsView';
 import AuthView from './components/AuthView';
 import UserProfileView from './components/UserProfileView';
 import { audioEngine } from './audio';
+import { socket } from './socket';
 import { useProfileStore, initializeProfiles } from './store/profileStore';
 import { useDeviceStore, initializeDevice } from './store/deviceStore';
 import { useLocalStorageState } from './hooks/useLocalStorageState';
@@ -44,6 +45,35 @@ export default function App() {
     isLoggedIn: true
   });
   const [showAuth, setShowAuth] = useState<boolean>(false);
+
+  useEffect(() => {
+    const handleStateUpdate = (updates: any) => {
+      if (updates.volume !== undefined) setVolume(updates.volume);
+      if (updates.gainStage !== undefined) setGainStage(updates.gainStage);
+      if (updates.customEq !== undefined) setCustomEq(updates.customEq);
+    };
+    socket.on('state:update', handleStateUpdate);
+    socket.on('state:init', handleStateUpdate);
+    return () => {
+      socket.off('state:update', handleStateUpdate);
+      socket.off('state:init', handleStateUpdate);
+    };
+  }, [setVolume, setGainStage, setCustomEq]);
+
+  const handleSetVolume = (v: number) => {
+    setVolume(v);
+    socket.emit('cmd:setVolume', { volume: v });
+  };
+
+  const handleSetGainStage = (g: 'Low' | 'High') => {
+    setGainStage(g);
+    socket.emit('cmd:setGainStage', { gainStage: g });
+  };
+
+  const handleSetCustomEq = (eq: number[]) => {
+    setCustomEq(eq);
+    socket.emit('cmd:setEq', { eq });
+  };
 
   // Load profile EQ when activeProfileId changes
   useEffect(() => {
@@ -168,9 +198,9 @@ export default function App() {
         {currentView === 'dashboard' && (
           <DashboardView 
             volume={volume}
-            setVolume={setVolume}
+            setVolume={handleSetVolume}
             gainStage={gainStage}
-            setGainStage={setGainStage}
+            setGainStage={handleSetGainStage}
             routing={routing}
             setRouting={setRouting}
           />
@@ -182,7 +212,7 @@ export default function App() {
             setEqMode={(mode) => setCurrentView(mode)}
             volume={volume}
             customEq={customEq}
-            setCustomEq={setCustomEq}
+            setCustomEq={handleSetCustomEq}
             activeProfileId={activeProfileId}
             setActiveProfileId={setActiveProfileId}
           />

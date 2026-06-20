@@ -1,13 +1,12 @@
 import { create } from 'zustand';
 import { SoundProfile } from '../types';
+import { socket } from '../socket';
 
 interface ProfileStore {
-  // State
   profiles: SoundProfile[];
   activeProfileId: string;
   profileVersions: Record<string, SoundProfile[]>;
   
-  // Actions
   setProfiles: (profiles: SoundProfile[]) => void;
   addProfile: (profile: SoundProfile) => void;
   updateProfile: (id: string, updates: Partial<SoundProfile>) => void;
@@ -16,12 +15,10 @@ interface ProfileStore {
   renameProfile: (id: string, newName: string) => void;
   setActiveProfile: (id: string) => void;
   
-  // Versioning
   saveProfileVersion: (profileId: string, snapshot: SoundProfile) => void;
   getProfileVersions: (profileId: string) => SoundProfile[];
   restoreProfileVersion: (profileId: string, versionIndex: number) => void;
   
-  // Import/Export
   exportProfiles: (profileIds?: string[]) => string;
   importProfiles: (json: string, merge?: boolean) => { success: boolean; added: number; conflicts: string[] };
 }
@@ -29,12 +26,10 @@ interface ProfileStore {
 const generateId = () => `profile-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
 export const useProfileStore = create<ProfileStore>((set, get) => ({
-  // Initial state
   profiles: [],
   activeProfileId: 'balanced',
   profileVersions: {},
   
-  // Actions
   setProfiles: (profiles) => set({ profiles }),
   
   addProfile: (profile) => {
@@ -52,10 +47,8 @@ export const useProfileStore = create<ProfileStore>((set, get) => ({
         [newProfile.id]: [newProfile],
       },
     }));
-    
-    // Persist to localStorage
-    const { profiles } = get();
-    localStorage.setItem('dac_profiles', JSON.stringify(profiles));
+    // TODO: Send to backend
+    // socket.emit('profiles:create', newProfile);
   },
   
   updateProfile: (id, updates) => {
@@ -66,11 +59,15 @@ export const useProfileStore = create<ProfileStore>((set, get) => ({
           : p
       );
       
-      // Auto-save version on update
       const updated = profiles.find(p => p.id === id);
       if (updated) {
+        // Emit eq change directly to hardware if it's the active profile
+        if (state.activeProfileId === id && updates.eq) {
+          socket.emit('cmd:setEq', { eq: updates.eq });
+        }
+
         const versions = state.profileVersions[id] || [];
-        const newVersions = [...versions, updated].slice(-20); // Keep last 20 versions
+        const newVersions = [...versions, updated].slice(-20);
         
         return {
           profiles,
@@ -80,34 +77,26 @@ export const useProfileStore = create<ProfileStore>((set, get) => ({
           },
         };
       }
-      
       return { profiles };
     });
-    
-    const { profiles } = get();
-    localStorage.setItem('dac_profiles', JSON.stringify(profiles));
+    // TODO: Sync to Supabase via backend
   },
   
   deleteProfile: (id) => {
     set(state => {
       const profiles = state.profiles.filter(p => p.id !== id);
       const { [id]: _, ...versionsRest } = state.profileVersions;
-      
       return {
         profiles,
         profileVersions: versionsRest,
         activeProfileId: state.activeProfileId === id ? 'balanced' : state.activeProfileId,
       };
     });
-    
-    const { profiles } = get();
-    localStorage.setItem('dac_profiles', JSON.stringify(profiles));
   },
   
   duplicateProfile: (id, newName) => {
     const { profiles } = get();
     const original = profiles.find(p => p.id === id);
-    
     if (!original) return;
     
     const duplicate: SoundProfile = {
@@ -119,7 +108,6 @@ export const useProfileStore = create<ProfileStore>((set, get) => ({
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
-    
     get().addProfile(duplicate);
   },
   
@@ -129,27 +117,32 @@ export const useProfileStore = create<ProfileStore>((set, get) => ({
   
   setActiveProfile: (id) => {
     set({ activeProfileId: id });
-    localStorage.setItem('dac_activeProfileId', id);
+    const profile = get().profiles.find(p => p.id === id);
+    if (profile) {
+      // Send active profile configuration to backend
+      socket.emit('cmd:applyProfile', {
+        profileId: id,
+        eq: profile.eq,
+        gainStage: 'Low', // This would come from actual profile settings if expanded
+        volume: 80,       // This would come from actual profile settings if expanded
+      });
+    }
   },
   
-  // Versioning
   saveProfileVersion: (profileId, snapshot) => {
     set(state => {
       const versions = state.profileVersions[profileId] || [];
-      const newVersions = [...versions, snapshot].slice(-20);
-      
       return {
         profileVersions: {
           ...state.profileVersions,
-          [profileId]: newVersions,
+          [profileId]: [...versions, snapshot].slice(-20),
         },
       };
     });
   },
   
   getProfileVersions: (profileId) => {
-    const { profileVersions } = get();
-    return profileVersions[profileId] || [];
+    return get().profileVersions[profileId] || [];
   },
   
   restoreProfileVersion: (profileId, versionIndex) => {
@@ -163,13 +156,9 @@ export const useProfileStore = create<ProfileStore>((set, get) => ({
     }
   },
   
-  // Import/Export
   exportProfiles: (profileIds) => {
     const { profiles } = get();
-    const toExport = profileIds 
-      ? profiles.filter(p => profileIds.includes(p.id))
-      : profiles;
-    
+    const toExport = profileIds ? profiles.filter(p => profileIds.includes(p.id)) : profiles;
     return JSON.stringify(toExport, null, 2);
   },
   
@@ -184,20 +173,15 @@ export const useProfileStore = create<ProfileStore>((set, get) => ({
       
       for (const profile of imported) {
         const exists = profiles.some(p => p.id === profile.id);
-        
         if (exists && !merge) {
           conflicts.push(profile.id);
         } else if (exists && merge) {
           get().updateProfile(profile.id, profile);
         } else {
-          get().addProfile({
-            ...profile,
-            id: generateId(), // Generate new ID for imported
-          });
+          get().addProfile({ ...profile, id: generateId() });
           added++;
         }
       }
-      
       return { success: true, added, conflicts };
     } catch (error) {
       return { success: false, added: 0, conflicts: [] };
@@ -205,29 +189,27 @@ export const useProfileStore = create<ProfileStore>((set, get) => ({
   },
 }));
 
-// Load profiles from localStorage on startup
 export const initializeProfiles = (defaultProfiles: SoundProfile[]) => {
-  const saved = localStorage.getItem('dac_profiles');
-  const savedActiveId = localStorage.getItem('dac_activeProfileId');
-  
-  if (saved) {
-    try {
-      const profiles = JSON.parse(saved);
-      useProfileStore.setState({ 
-        profiles, 
-        profileVersions: {},
-        activeProfileId: savedActiveId || 'balanced'
-      });
-    } catch {
-      useProfileStore.setState({ 
-        profiles: defaultProfiles,
-        activeProfileId: savedActiveId || 'balanced'
-      });
+  // Try to load initial from backend. For now we use default profiles.
+  useProfileStore.setState({ 
+    profiles: defaultProfiles,
+    activeProfileId: 'balanced'
+  });
+
+  socket.on('state:init', (state: any) => {
+    if (state.activeProfileId) {
+      useProfileStore.setState({ activeProfileId: state.activeProfileId });
     }
-  } else {
-    useProfileStore.setState({ 
-      profiles: defaultProfiles,
-      activeProfileId: savedActiveId || 'balanced'
-    });
-  }
+  });
+
+  socket.on('state:update', (updates: any) => {
+    if (updates.activeProfileId) {
+      useProfileStore.setState({ activeProfileId: updates.activeProfileId });
+    }
+    // Update local EQ if device EQ changed from another source
+    if (updates.customEq) {
+      const state = useProfileStore.getState();
+      state.updateProfile(state.activeProfileId, { eq: updates.customEq });
+    }
+  });
 };
